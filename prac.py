@@ -10,7 +10,6 @@ import tensorflow.keras.backend as K
 from sklearn.preprocessing import MinMaxScaler
 import pickle
 
-
 def reorder_columns(df):
     matcol = [col for col in df.columns if col not in (['Rank'] + list(df_G1.columns) + list(df_G2.columns) + list(df_tand.columns))]
     columns_sorted = sorted(matcol, key=custom_sort_key)
