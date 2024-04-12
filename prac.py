@@ -9,35 +9,6 @@ from tensorflow.keras.models import model_from_json
 import tensorflow.keras.backend as K
 from sklearn.preprocessing import MinMaxScaler
 import pickle
-import hmac
-
-
-def check_password():
-    """Returns `True` if the user had the correct password."""
-
-    def password_entered():
-        """Checks whether a password entered by the user is correct."""
-        if hmac.compare_digest(st.session_state["password"], st.secrets["password"]):
-            st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Don't store the password.
-        else:
-            st.session_state["password_correct"] = False
-
-    # Return True if the password is validated.
-    if st.session_state.get("password_correct", False):
-        return True
-
-    # Show input for password.
-    st.text_input(
-        "Password", type="password", on_change=password_entered, key="password"
-    )
-    if "password_correct" in st.session_state:
-        st.error("Password incorrect")
-    return False
-
-
-if not check_password():
-    st.stop()  # Do not continue if check_password is not True.
 
 def reorder_columns(df):
     matcol = [col for col in df.columns if col not in (['Rank'] + list(df_G1.columns) + list(df_G2.columns) + list(df_tand.columns))]
@@ -80,9 +51,10 @@ oil_content_dict['AAE525A'] = 25.0
 
 oil_content = []
 
-# 원료 리스트 제작
+# 학습에 사용된 모든 원료 리스트
 raw_mat_list = model_input_columns.copy().tolist()
-    # 규칙에 따라 정렬
+
+# 규칙에 따라 정렬하는 함수
 custom_order = 'REQCDYAKTUPX'
 custom_order_map = {char: index for index, char in enumerate(custom_order)}
 def custom_sort_key(code):
@@ -109,12 +81,17 @@ st.caption('If polymer contains oil, please use phr value excluding the oil cont
 
 raw_mat_slider = st.multiselect('Raw Material List', raw_mat_list, key='2')
 
-col = raw_mat_slider.copy()
+
+raw_mat_col = raw_mat_slider.copy() # 기존 range setting에서 받은것만 담아놓을 애
+col = raw_mat_slider.copy() # 나중에 fixed까지 추가해줄 애
+
 base_rm = list()
 base_phr = list()
 phr_min = list()
 phr_max = list()
 rubber_col = list()
+fixed_rubber_col = list()
+raw_mat_rubber_col = list()
 
 st.caption('"Step" must be greater than 1. Higher "Step" value increases the number of data points within the range.')
 stp = st.number_input('Step', step=1)
@@ -154,18 +131,25 @@ st.header('Fixed Material Setting (optional)')
 # st.subheader('Fixed phr Settings')
 st.write('Please specify raw materials with fixed phr values.')
 fixed_phr_dict = {}  # Dictionary to store fixed phr values
-fixed_phr_materials = st.multiselect('Raw Material List', raw_mat_list, key='fixed_phr')
-for material in fixed_phr_materials:
+fixed_col = st.multiselect('Raw Material List', raw_mat_list, key='fixed_phr')
+for material in fixed_col:
     fixed_phr_value = st.number_input(f"{material}", min_value=0.0, max_value=200.0, key=f"fixed_{material}")
     if material[2] == 'E' or material[2] == 'Q' or material[2]=='R':
         fixed_phr_value = fixed_phr_value*oil_content_dict[material]/100 + fixed_phr_value
     fixed_phr_dict[material] = fixed_phr_value
 
-col = fixed_phr_materials + col
+col = fixed_col + col
 
 st.header('Reference Recipe Setting (optional)')
 # st.subheader('Variables')
 st.write('Please set phr values for baseline recipe.')
+
+###
+#cpd_list = ['CQP07', 'CQP08', 'CQP09','CQP11', 'CQP19', 'CQP22', 'CQP25', 'CQP27',
+#            'CQP28', 'CQP37', 'CQP47','CQP50', 'CQP53', 'CQP59', 'CQP60', 'CQP70']
+#compound_slider = st.multiselect('Compound List', cpd_list, key='3')
+###
+
 
 reference_slider = st.multiselect('Raw Material List', raw_mat_list, key='1')
 reference_recipe = {}
@@ -186,8 +170,11 @@ for i in reference_slider:
 #         phr_min.append(phr[0])
 #         phr_max.append(phr[1])
 
+phr_min_rawmat = phr_min.copy()
+phr_max_rawmat = phr_max.copy()
+
 # 고정값 phr 저장
-for i in fixed_phr_materials:
+for i in fixed_col:
     phr_min.insert(0,fixed_phr_dict[i])
     phr_max.insert(0,fixed_phr_dict[i])
     # if i[2] == 'E' or i[2] == 'Q' or i[2]=='R':
@@ -197,65 +184,100 @@ for i in fixed_phr_materials:
 if st.button('Create Recipes'):
     real_start = int(time.time())
     # rubber col에 3번째 알파벳이 Q나 E나 R인 애들(폴리머) material code 저장
-    for i in col:
+    for i in fixed_col:
         if i[2] == 'E' or i[2] == 'Q' or i[2]=='R':
-            rubber_col.append(i)
+            fixed_rubber_col.append(i)
+            oil_content.append(oil_content_dict[i])
+    for i in raw_mat_col:
+        if i[2] == 'E' or i[2] == 'Q' or i[2]=='R':
+            raw_mat_rubber_col.append(i)
             oil_content.append(oil_content_dict[i])
 
+    
+    
     # 고무 재료 중 마지막거 잠깐 빼놓고 인덱스 저장
-    rubber_tmp = rubber_col[:-1]
-    rubber_idx = col.index(rubber_col[-1])
+    if raw_mat_rubber_col!=[]:
+        rubber_excluded = raw_mat_rubber_col[-1]
+        rubber_tmp = raw_mat_rubber_col[:-1] # 마지막 폴리머 제외한 것
+        rubber_idx = raw_mat_rubber_col.index(raw_mat_rubber_col[-1]) # 마지막 폴리머 인덱스
 
-    col.pop(rubber_idx)
+        # raw_mat_rubber_col.pop(rubber_idx) # 마지막 폴리머 제거
 
-    print('rubber index:', rubber_idx)
+        phr_min_tmp = phr_min_rawmat.pop(rubber_idx) # 마지막 폴리머 phr_min 제거, 저장. phr_min_rawmat은 마지막 고무 빠지게 됨
+        phr_max_tmp = phr_max_rawmat.pop(rubber_idx) # 마지막 폴리머 phr_max 제거, 저장
 
-    phr_min_tmp = phr_min.pop(rubber_idx) # phr_min_tmp: rubber 컬럼에 대한 phr lower limit
-    phr_max_tmp = phr_max.pop(rubber_idx) # phr_max_tmp: rubber 컬럼에 대한 phr upper limit
 
     # 사용자가 설정한 범위를 stp만큼 분할
-    df_range = pd.DataFrame(columns=col)
+        raw_mat_col_filtered = [item for item in raw_mat_col if item != rubber_excluded]
+    else:
+        raw_mat_col_filtered = raw_mat_col.copy()
 
-    for i, phr in enumerate(list(zip(phr_min, phr_max))):
-        phr_range = np.linspace(list(phr)[0], list(phr)[1],stp)
-        df_range.iloc[:,i] = phr_range
+    # 고정 폴리머 phr 합에 따라 가변 폴리머 phr 제한하려고 함
+    phr_fixed_rubber = []
+    if fixed_rubber_col != []:
+        for i in fixed_rubber_col:
+            phr_fixed_rubber.append(fixed_phr_dict[i])
+
+        # (100 - 고정 폴리머 phr합)을 maximum으로 설정
+        total_phr_fixed_rubbers = sum(phr_fixed_rubber)
+        max_phr_for_variable_rubbers = 100 - total_phr_fixed_rubbers
+
+        # phr_max_rawmat 값중에 고무 phr에 해당하는 값(raw_mat_col_filtered에서 고무 순서랑 같은)만 max_phr_for_variable_rubbers로 바꿔줌
+        phr_max_rawmat = [max_phr_for_variable_rubbers if mat[2] in ['E', 'Q', 'R'] 
+                          else max_val for mat, max_val in zip(raw_mat_col_filtered, phr_max_rawmat)]
+
+
+    print('#################!!!!!!!!!!!!!!!!!!!!!!!!!!')
+    print('rawmatcolfiltered:', raw_mat_col_filtered)
+    print('rubber_exclueded:', rubber_excluded)
+    print('rubberidx:', rubber_idx)
+    print('phrminrawmat:', phr_min_rawmat)
+    print('phrmaxrawmat:', phr_max_rawmat)
+
+
+    df_range = pd.DataFrame(columns=raw_mat_col_filtered)
+    for i, phr in enumerate(list(zip(phr_min_rawmat, phr_max_rawmat))):
+            phr_range = np.linspace(list(phr)[0], list(phr)[1],stp)
+            df_range.iloc[:,i] = phr_range
+
+    print('#### df_range ####')
+    print(df_range)
+    print()
 
 # 시간 측정 (구간 1)
     # product 함수로 모든 경우의 수 리스트 생성
     initial_time = time.time()
-    df_index = pd.DataFrame(columns=col)#, index=list(range(stp**len(col))))
-    idx = list(product(range(stp),repeat=len(col)))
+
+    idx = list(product(range(stp),repeat=len(raw_mat_col)))
     print(f"elapsed time for process 1: {round((time.time() - initial_time),2)} sec ({round((time.time()-initial_time)/60, 2)} min)")
     start = time.time()
 
-
-# 시간 측정 (구간 2)
-    # start = time.time()
-    # 모든 경우의 수 조합 담는 데이터프레임 생성
-    # for i in idx:
-        # df_index.loc[len(df_index),:] = list(i)
-
-    # 수행 시간 감소
-    # # 1.
-    # # 모든 경우의 수를 담을 사이즈의 빈 데이터프레임 생성해놓고
-    # df_index = pd.DataFrame(index=range(len(idx)), columns=df_range.columns)
-
-    # # 채우기
-    # for i, combination in enumerate(idx):
-    #     df_index.iloc[i] = combination
-
-    # 2.
-    df_index = pd.DataFrame(idx, columns = df_range.columns)
+    df_index = pd.DataFrame(idx, columns = raw_mat_col)
     
 
     print(f"elapsed time for process 2: {(round((time.time() - start),2))} sec ({round((time.time()-start)/60, 2)} min)")
 
+    print('df_index:', df_index)
+    print('df_range:', df_range)
+
+
 # 시간 측정 (구간 3)
-    # range에 있는 값들을 경우의수에 맞게 recipe로 옮기는 과정
+    # range에 있는 값들을 경우의 수에 맞게 recipe로 옮기는 과정
     # start = time.time()
-    df_recipe = pd.DataFrame(columns=col, index=df_index.index)
+    # if rubber_excluded is defined, exclude it from the columns
+    
+
+    if raw_mat_rubber_col!=[]:
+        df_recipe = pd.DataFrame(columns=[item for item in col if item != rubber_excluded], index=df_index.index)
+
+    else:
+        df_recipe = pd.DataFrame(columns=col, index=df_index.index)
     # map 함수로 range에 있는 값들을 경우의수에 맞게 recipe로 옮김 
-    for col in df_range.columns:
+
+    print('########################################')
+    print('raw_mat_col_filtered:', raw_mat_col_filtered)
+
+    for col in raw_mat_col_filtered:
         df_recipe[col] = df_index[col].map(df_range[col])
 
     # for i in df_index.index:
@@ -270,7 +292,25 @@ if st.button('Create Recipes'):
 
     print('rubber_col:', rubber_col)
 
-        # 고무 재료가 하나만 있으면 100phr에 상응하는 값으로 다 채워줌
+    print('##### df_recipe')
+    print('AAE182A' in df_recipe.columns)
+    print(df_recipe)
+    print('#####')
+    
+
+    rubber_col = fixed_rubber_col + raw_mat_rubber_col
+    print(rubber_col)
+
+
+
+
+    # fixed가 들어왔으면, 지금 df_recipe에서 fixed rubber이 Nan으로 되어있어서 채워줌
+    if fixed_rubber_col != []:
+        for i in fixed_rubber_col:
+            df_recipe[i] = fixed_phr_dict[i]
+
+
+    # 고무 재료가 하나만 있으면 100phr에 상응하는 값으로 다 채워줌
     if len(rubber_col) == 1:
         single_rubber_proportion = (100 + oil_content[0])
         df_recipe[rubber_col[0]] = single_rubber_proportion
@@ -279,22 +319,31 @@ if st.button('Create Recipes'):
         # 값: 100 - (다른 rubber phr 합)
         # 여기서 rubber column에 있는 다른애들 phr 합이 100을 넘어가는 경우가 있음 > 값이 음수가 됨
     else:
-        df_recipe.insert(len(rubber_col)-1, rubber_col[-1], (100 - (df_recipe[rubber_col[:-1]]/[100+i for i in oil_content[:-1]]*100).sum(axis=1)) * (100 + oil_content[-1])/100)
+        if raw_mat_rubber_col!=[]:
+            df_recipe.insert(len(rubber_col)-1, rubber_col[-1], (100 - (df_recipe[rubber_col[:-1]]/[100+i for i in oil_content[:-1]]*100).sum(axis=1)) * (100 + oil_content[-1])/100)
+    
+
 
     # 고정값 받은대로 설정
     for material, value in fixed_phr_dict.items():
         if material in df_recipe.columns:
             df_recipe[material] = value
+    
 
     # # 범위 안에 들어오는지 확인
     #     # phr max보다 rubber phr이 큰 경우 여기서 잘려나감
     #     # 고무 재료가 하나만 있고 100+oil_content가 상한을 넘어버리면, df_recipe가 비어버리는 상황이 발생
     #     # 그래서 하나만 있을때는 일단 확인안하도록 해놓음 (검토해서 수정해야할듯)
 
-    if len(rubber_col) > 1:
-        df_recipe = df_recipe[df_recipe[rubber_col[-1]] >= phr_min_tmp]
-        df_recipe = df_recipe[df_recipe[rubber_col[-1]] <= phr_max_tmp]
+
     
+
+
+    # df_recipe column중에 rubber_col에 해당하는 애들 값이 음수면 해당 행 제거
+    if len(rubber_col) > 1 and raw_mat_rubber_col!=[]:
+        for i in rubber_col:
+            df_recipe = df_recipe[df_recipe[i] >= 0]
+
     df_recipe[base_rm] = base_phr
     
     # AAD113A랑 AAD342A가 둘다 포함되어 있으면 AAD113A는 AAD342A의 8%로 설정해줌
@@ -304,10 +353,10 @@ if st.button('Create Recipes'):
     
     df_recipe.drop_duplicates(inplace=True)
     df_recipe.reset_index(inplace=True, drop=True)
-    print(df_recipe.shape)
+    
     df_recipe = df_recipe.astype(float)
 
-    df_recipe.to_csv("recipe.csv", index=False) # 레시피 저장
+    # df_recipe.to_csv("recipe.csv", index=False) # 레시피 저장
 
 
 
@@ -331,8 +380,6 @@ if st.button('Create Recipes'):
     df_reference[list(reference_recipe.keys())] = list(reference_recipe.values())
     df_recipe_filled = pd.concat([df_reference, df_recipe_filled], ignore_index=True)
 
-    print('reference:', df_reference)
-    print('recipe:', df_recipe_filled)
 
     # df_train_g2 = pd.read_csv('G2_train.csv')
     # model_input_columns_g2 = df_train_g2.columns[:-4] # 모델에 들어가는 데이터 컬럼 (종속변수 4개 제외)
@@ -387,7 +434,7 @@ if st.button('Create Recipes'):
     st.success(f'Step 2/3 completed, time taken: {round(time.time() - start, 2)} sec.')
     start = time.time()
 
-    print('pred_tand:', pred_tand_df.loc[0,:])
+
 ### 역설계
     ### 레퍼런스 레시피 받아서 예측값 사용
     # 레퍼런스 안들어오면 제한 없음
@@ -398,9 +445,7 @@ if st.button('Create Recipes'):
     else:
         G2_0_limit = pred_g2_df.loc[0,'G2_0'] # 0'C g2 최소값 설정
         tand_60_limit = pred_tand_df.loc[0,'tand_60'] # 60'C tand 최대값 설정
-    print(df_reference)
-    print('G2 lim:', G2_0_limit)
-    print('tand lim:', tand_60_limit)
+
 
     df_G1 = pred_g1_df.copy()
     df_G2 = pred_g2_df.copy()
@@ -456,12 +501,12 @@ if st.button('Create Recipes'):
                 break
     idx.append(0) # 레퍼런스 레시피 추가
     # print(std)
-    print(f'idx: {idx}')
+    # print(f'idx: {idx}')
     # print(len(idx))
     # print(len(set(idx)))
-    print('elapsed time, Ver 1:', round((time.time() - start), 4))
+    # print('elapsed time, Ver 1:', round((time.time() - start), 4))
 
-    print(df_G1.columns)
+    # print(df_G1.columns)
 
     # Ver 2. 정규화 후 순위별로 점수 산출, 합산 -- 이상치에 민감
     # start = time.time()
@@ -480,7 +525,7 @@ if st.button('Create Recipes'):
 
     df_rank_scaling = reorder_columns(df_rank_scaling)
 
-    print('elapsed time, Ver 2:', round((time.time() - start), 4))
+    # print('elapsed time, Ver 2:', round((time.time() - start), 4))
 
     # Ver 3. 각 물성별 순위 자체를 기준으로 점수 산출
     # 교집합 탐색
@@ -534,7 +579,7 @@ if st.button('Create Recipes'):
 
     target_recipe = input.iloc[idx]
     target_recipe.insert(0, 'Rank', range(1,target_recipe.shape[0]+1))
-    print('target recipe:', target_recipe)
+    # print('target recipe:', target_recipe)
     # target_recipe.loc[:,'rank'] = range(1,target_recipe.shape[0]+1)
     # target_recipe = target_recipe.iloc[:,:-12]
 
@@ -593,4 +638,4 @@ if st.button('Create Recipes'):
     # print(df_composite_rank.shape[0])
     # print(pred_g1_df.loc[0,:])
     # print(df_recipe.columns)
-    print('reference:', df_recipe_filled_concat.loc[0,:])
+    # print('reference:', df_recipe_filled_concat.loc[0,:])
